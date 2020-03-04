@@ -11,10 +11,10 @@ typedef struct SFSVarchar{
 
 typedef struct SFSTable{
     uint32_t size;               /* size of the table */
-    uint32_t freeSpace;           /* free space left in the table */
-    uint32_t storSize;          /* Space usd to store data in the table(except header and recordMeta) */
+    uint32_t storSize;           /* free space left in the table */
+    uint32_t freeSpace;          /* free space left in the table */
     uint32_t varcharNum;         /* number of varchars in the table */
-    uint32_t recordNum;           /* number of record in the table */
+    uint32_t recordNum;          /* number of record in the table */
     uint32_t recordSize;         /* size of a record */
 
     /* !!! when store in the file, the pointer should change to offset !!!*/
@@ -38,7 +38,7 @@ typedef struct SFSDatabase{
 
 #define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
 inline void sfsCompileTest(){
-    BUILD_BUG_ON(__SIZEOF_POINTER__ != 4);
+    //BUILD_BUG_ON(__SIZEOF_POINTER__ != 4);
     BUILD_BUG_ON(sizeof(SFSVarchar) != 4);
     BUILD_BUG_ON(sizeof(SFSTable) != 36);
     BUILD_BUG_ON(sizeof(SFSDatabase) != 84);
@@ -65,6 +65,8 @@ SFSTable* sfsDatabaseAddTable(SFSDatabase *db, uint32_t storSize, const SFSVarch
 
 // return the lastest err
 char *sfsErrMsg(); 
+void writeSize(char* target, char* size);
+uint32_t readSize(SFSVarchar* varchar);
 
 #endif
 
