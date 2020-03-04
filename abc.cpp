@@ -8,6 +8,17 @@ uint32_t varcharSize(const SFSVarchar* varchar)
     return sizeof(uint32_t) + varchar->len;
 }
 
+SFSVarchar* readVarchar(SFSTable** ptable, FILE* fp)
+{
+    uint32_t size;
+    fread(&size, 4, 1, fp);
+    char* s = (char*)malloc(size);
+    fread(s, 1, size, fp);
+    SFSVarchar* varchar = sfsTableAddVarchar(ptable, size, s);
+
+    return varchar;
+}
+
 int sfsVarcharCons(SFSVarchar* varchar, const char* src)
 {
     char* s = (char*)&varchar + 4;
@@ -41,7 +52,7 @@ int sfsVarcharRelease(SFSVarchar* varchar)
 
 int sfsTableCons(SFSTable* table, uint32_t initStorSize, const SFSVarchar* recordMeta, SFSDatabase* db)
 {
-    table->size = initStorSize + sizeof(uint32_t) * 9;
+    table->size = initStorSize + sizeof(uint32_t) * 9 + varcharSize(recordMeta);
     table->storSize = 0;
     table->freeSpace = initStorSize;
     table->varcharNum = 0;
@@ -49,7 +60,7 @@ int sfsTableCons(SFSTable* table, uint32_t initStorSize, const SFSVarchar* recor
     table->recordSize = recordSize(recordMeta);
 
     table->recordMeta = (SFSVarchar*)recordMeta;
-    table->lastVarchar = (SFSVarchar*)(table->buf + table->size);
+    table->lastVarchar = (SFSVarchar*)(&table->buf[initStorSize]);
     table->database = db;
     return 0;
 }
@@ -195,7 +206,15 @@ SFSDatabase* sfsDatabaseCreateLoad(const char* fileName)
         sfsErrMsg();
     for (uint32_t i = 0; i < db->tableNum; i++) {
         uint32_t table_size;
-        fread(&table_size, 4, 1, fp);
+        uint32_t* tableHead = (uint32_t*)malloc(sizeof(uint32_t) * 9);
+        fread(&tableHead, sizeof(uint32_t), 9, fp);
+        SFSTable* table = sfsTableCreate(tableHead[1] + tableHead[2], NULL, db);
+        for (uint32_t j = 0; j < tableHead[4]; j++)//±éÀúrecords
+        {
+            fread(&table->buf[j * table->recordSize], table->recordSize, 1, fp);//¶Árecord¿é
+            readVarchar(&table, fp);
+            //to be continue¡£¡£¡£¡£
+        }
     }
     return db;
 }
