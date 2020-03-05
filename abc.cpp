@@ -15,7 +15,6 @@ SFSVarchar* readVarchar(SFSTable** ptable, FILE* fp)
     char* s = (char*)malloc(size);
     fread(s, 1, size, fp);
     SFSVarchar* varchar = sfsTableAddVarchar(ptable, size, s);
-
     return varchar;
 }
 
@@ -41,7 +40,7 @@ SFSVarchar* sfsVarcharCreate(uint32_t varcharSize, const char* src)
     //char* s = (char*)malloc(sizeof(uint32_t) + varcharSize);
     SFSVarchar* varchar = (SFSVarchar*)malloc(sizeof(uint32_t) + varcharSize);
     memcpy(&varchar->len, &varcharSize, sizeof(uint32_t));
-    memcpy(&varchar->buf, (void*)src, strlen(src));
+    memcpy(&varchar->buf, (void*)src, varcharSize);
     return varchar;
 }
 int sfsVarcharRelease(SFSVarchar* varchar)
@@ -79,9 +78,10 @@ SFSTable* sfsTableCreate(uint32_t initStorSize, const SFSVarchar* recordMeta, SF
     table->recordSize = recordSize(recordMeta);
 
     table->recordMeta = (SFSVarchar*)recordMeta;
-    table->lastVarchar = (SFSVarchar*)(&table->buf[initStorSize]);
+    table->lastVarchar = (SFSVarchar*)(&(table->buf[initStorSize]));
     table->database = db;
 
+    db->table[db->tableNum++] = table;
     return table;
 }
 int sfsTableRelease(SFSTable* table)
@@ -90,7 +90,7 @@ int sfsTableRelease(SFSTable* table)
         free((void*)table->buf[i * sizeof(int*)]);
     }
     for (uint32_t i = 0; i < table->varcharNum; i += sizeof(int*)) {
-        free((void*)(table->lastVarchar - i*sizeof(void*)));
+        sfsVarcharRelease((SFSVarchar*)(table->lastVarchar - i*sizeof(void*)));
     }
     return 0;
 }
@@ -108,9 +108,10 @@ void* sfsTableAddRecord(SFSTable** ptable)
 {
     if ((*ptable)->freeSpace <= (*ptable)->recordSize)
         sfsTableReserve(ptable, (*ptable)->storSize * 2);
-    (*ptable)->recordSize++;
-    (*ptable)->size += (*ptable)->recordSize;
-    return &(*ptable)->buf[((*ptable)->recordNum - 1) * (*ptable)->recordSize];
+    (*ptable)->recordNum++;
+    (*ptable)->freeSpace -= (*ptable)->recordSize;
+    (*ptable)->storSize += (*ptable)->recordSize;
+    return &((*ptable)->buf[((*ptable)->recordNum - 1) * (*ptable)->recordSize]);
 }
 
 SFSVarchar* sfsTableAddVarchar(SFSTable** ptable, uint32_t varcharLen, const char* src)
@@ -120,8 +121,11 @@ SFSVarchar* sfsTableAddVarchar(SFSTable** ptable, uint32_t varcharLen, const cha
 
     SFSVarchar* varchar = sfsVarcharCreate(varcharLen, src);
     (*ptable)->size += varcharSize(varchar);
-    memcpy(&(*ptable)->buf[(*ptable)->size - (++(*ptable)->varcharNum) * sizeof(void*)], varchar, sizeof(void*));
-    (*ptable)->lastVarchar = (SFSVarchar*)(&(*ptable)->buf[(*ptable)->size - ((*ptable)->varcharNum) * sizeof(void*)]);
+    (*ptable)->freeSpace -= sizeof(void*);
+    (*ptable)->storSize += sizeof(void*);
+
+    memcpy((*ptable)->lastVarchar - (++(*ptable)->varcharNum) * sizeof(void*), varchar, sizeof(void*));
+    (*ptable)->lastVarchar -= sizeof(void*);
     return varchar;
 }
 
@@ -148,17 +152,12 @@ void sfsDatabaseRelease(SFSDatabase* db)
 
 int sfsTableSave(FILE* fp, SFSTable* table,uint32_t offset)
 {
-    //sizeof(uint32_t) * 6 + table->recordNum * table->recordSize
-        //+ varcharSize(table->recordMeta);
-
     uint32_t tablesize = 0;
-    for (uint32_t i = 0; i < table->varcharNum; i++) {
-        tablesize += varcharSize((SFSVarchar*)(table->lastVarchar + i * sizeof(void*)));
-    }
     char* s = (char*)malloc(10000);
+
     memcpy(s, &table->size, sizeof(uint32_t) * 6);
-    *(int*)(s + 24) = table->size - varcharSize(table->recordMeta);
-    *(int*)(s + 28) = table->size - varcharSize(table->recordMeta) - table->varcharNum * sizeof(void*);
+    *(int*)(s + 24) = offset + table->size - varcharSize(table->recordMeta);
+    *(int*)(s + 28) = offset + table->size - varcharSize(table->recordMeta) - table->varcharNum * sizeof(void*);
     *(int*)(s + 32) = offset;
 
     uint32_t i, j;
@@ -172,7 +171,7 @@ int sfsTableSave(FILE* fp, SFSTable* table,uint32_t offset)
         tablesize += varcharsize;
     }
 
-    memcpy(s + 36 + table->recordNum * table->recordSize + tablesize, &table->recordMeta->len, varcharSize(table->recordMeta));
+    memcpy(s + 36 + table->recordNum * table->recordSize + tablesize, &(table->recordMeta)->len, varcharSize(table->recordMeta));
     *(int*)s = 36 + table->recordNum * table->recordSize + tablesize;
     fwrite(s, 36 + table->recordNum * table->recordSize + tablesize + varcharSize(table->recordMeta), 1, fp);
 
@@ -200,22 +199,37 @@ SFSDatabase* sfsDatabaseCreateLoad(const char* fileName)
     FILE* fp;
     if (NULL == (fp = fopen(fileName, "rb")))
         sfsErrMsg();
+
     SFSDatabase* db = sfsDatabaseCreate();
     fread(&db->magic, sizeof(SFSDatabase), 1, fp);
     if (db->magic != 0x534653aa)
         sfsErrMsg();
     for (uint32_t i = 0; i < db->tableNum; i++) {
-        uint32_t table_size;
+        uint32_t varcharLen;
+        char* s = (char*)malloc(1000);
         uint32_t* tableHead = (uint32_t*)malloc(sizeof(uint32_t) * 9);
+
         fread(&tableHead, sizeof(uint32_t), 9, fp);
         SFSTable* table = sfsTableCreate(tableHead[1] + tableHead[2], NULL, db);
+
+        memcpy(&table->size, tableHead, sizeof(uint32_t) * 6);
+        table->database = db;
         for (uint32_t j = 0; j < tableHead[4]; j++)//±éÀúrecords
         {
             fread(&table->buf[j * table->recordSize], table->recordSize, 1, fp);//¶Árecord¿é
-            readVarchar(&table, fp);
-            //to be continue¡£¡£¡£¡£
+            for (uint32_t k = 0; k < table->varcharNum; k++) {
+                fread(&varcharLen, 4, 1, fp);
+                fread(s, 1, varcharLen, fp);
+                sfsTableAddVarchar(&table, varcharLen, s);
+            }
+            fread(&varcharLen, 4, 1, fp);
+            fread(s, 1, varcharLen, fp);
+            table->recordMeta = sfsVarcharCreate(varcharLen, s);
         }
+        free(s);
+        free(tableHead);
     }
+    fclose(fp);
     return db;
 }
 
