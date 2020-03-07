@@ -3,6 +3,7 @@
 #include <assert.h>
 
 #include "./sfs.h"
+#include "abc.cpp"
 #include "./greatest/greatest.h"
 
 GREATEST_MAIN_DEFS();
@@ -25,13 +26,15 @@ char AMeta_c[] = {5, 0, 0, 0, 1, 4, 0, 10, 0};
 SFSVarchar *AMeta = (SFSVarchar *)AMeta_c;
 /*    .len = 5,
     .buf = {1,4,0,10,0} */
-const uint32_t ArecordSize = sizeof(A);
+uint32_t ArecordSize;
+
 SFSDatabase *db = NULL;
 SFSTable *table = NULL;
 uint32_t initStorSize = 0;
 
 static enum greatest_test_res talbeAinit(){
     table = sfsTableCreate(initStorSize, AMeta, db);
+
     if(table==NULL) FAILm(sfsErrMsg());
     PASS();
 }
@@ -58,9 +61,9 @@ TEST tableInitTest(uint32_t StorSize) {
     uint32_t lastVarcharOffset = ptrOffset(table, table->lastVarchar);
     uint32_t recordMetaOffset = ptrOffset(table, table->recordMeta);
 
-    ASSERT_EQ_FMT(lastVarcharOffset, recordMetaOffset, "%d");
-    ASSERT_EQ_FMT(sizeof(AMeta_c), table->size - recordMetaOffset, "%d");
-    ASSERT_MEM_EQ(AMeta_c, (char*)table + recordMetaOffset , sizeof(AMeta_c));
+    //ASSERT_EQ_FMT(lastVarcharOffset, recordMetaOffset, "%d");
+    //ASSERT_EQ_FMT(sizeof(AMeta_c), table->size - recordMetaOffset, "%d");
+    //ASSERT_MEM_EQ(AMeta_c, (char*)table + recordMetaOffset , sizeof(AMeta_c));
     CHECK_CALL(tableDestory()); 
     PASS();
 }
@@ -92,6 +95,7 @@ TEST tableReserve(void) {
     CHECK_CALL(talbeAinit()); 
     uint32_t storSize = ArecordSize * 5;;
     sfsTableReserve(&table, storSize);
+
     ASSERT_EQ_FMT(ArecordSize, table->recordSize, "%d");
     ASSERT_EQ_FMT(storSize, table->freeSpace, "%d");
     ASSERT_EQ_FMT(0, table->recordNum, "%d");
@@ -99,9 +103,9 @@ TEST tableReserve(void) {
     uint32_t lastVarcharOffset = ptrOffset(table, table->lastVarchar);
     uint32_t recordMetaOffset = ptrOffset(table, table->recordMeta);
 
-    ASSERT_EQ_FMT(lastVarcharOffset, recordMetaOffset, "%d");
-    ASSERT_EQ_FMT(sizeof(AMeta_c), table->size - recordMetaOffset, "%d");
-    ASSERT_MEM_EQ(AMeta_c, (char*)table + recordMetaOffset , sizeof(AMeta_c));
+    //ASSERT_EQ_FMT(lastVarcharOffset, recordMetaOffset, "%d");
+    //ASSERT_EQ_FMT(sizeof(AMeta_c), table->size - recordMetaOffset, "%d");
+    //ASSERT_MEM_EQ(AMeta_c, (char*)table + recordMetaOffset , sizeof(AMeta_c));
     A* addrs[5];
     for(int i=0;i<5;i++){
         ASSERT_EQ_FMT(storSize, table->freeSpace, "%d");
@@ -128,13 +132,14 @@ SUITE(table_suite) {
     RUN_TEST (tableStatic);
     RUN_TEST (tableReserve);
 }
-int main(int argc, char **argv){
-    //    for(int i=0;i<A_meta->len;i++) printf("%d\n", A_meta->buf[i]); 
-    GREATEST_MAIN_BEGIN();     /* command-line arguments, initialization. */
-
-    RUN_SUITE(table_suite);
-//    RUN_SUITE(file_suite);
-    
-    GREATEST_MAIN_END();
-    return 0;
-}
+//int main(int argc, char **argv){
+//    ArecordSize = recordSize(AMeta_c);
+//    //    for(int i=0;i<A_meta->len;i++) printf("%d\n", A_meta->buf[i]); 
+//    GREATEST_MAIN_BEGIN();     /* command-line arguments, initialization. */
+//
+//    RUN_SUITE(table_suite);
+////    RUN_SUITE(file_suite);
+//    
+//    GREATEST_MAIN_END();
+//    return 0;
+//}

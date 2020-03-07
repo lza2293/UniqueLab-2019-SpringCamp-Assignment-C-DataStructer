@@ -1,9 +1,72 @@
 #include "./sfs.h"
+#include "../sfs.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
-#define __SIZEOF_POINTER__ (8)
+#define __SIZEOF_POINTER__ (sizeof(void*))
+
+void makeCrcTable()
+{
+    uint32_t c, code;
+    uint32_t NUM = 0xEDB88323;
+    for (uint32_t i = 0; i < 256; i++)
+    {
+        c = (uint32_t)i;
+        code = 0xffffffff;
+        for (int bit = 0; bit < 8; bit++)
+        {
+            if (c & 0x01) {
+                code ^= (NUM << (8 - bit));
+                c ^= ((NUM >> (24 + bit)) & 0xff);
+                c >>= 1;
+                //c = (c >> 1) ^ (0xEDB88323);
+            }
+            else
+                c = c >> 1;
+        }
+        crc32_table[i] = code;
+    }
+}
+
+CRCNum* iniCRC()
+{
+    CRCNum* crc = (CRCNum*)malloc(sizeof(CRCNum));
+    if (NULL == crc)
+        sfsErrMsg;
+    crc->crc = 0;
+    makeCrcTable();
+    return crc;
+}
+void calcCRC(CRCNum* crc, char* s, uint32_t len) {
+    //for (uint32_t i = 0; i < len; i++) {
+    //    while (crc->position < 2 && i < len)
+    //        crc->bytes[crc->position++] = s[i];
+    //    if (len == i)
+    //        break;
+    //    uint8_t mask = CRCTables[crc->bytes[0]>>4];
+
+    //    crc->bytes[0]<<4;
+    //    crc->bytes[0] &= 0xf0;
+    //    crc->bytes[0] |= ((crc->bytes[1] >> 4) & 0x0f);
+    //    crc->bytes[1] << 4;
+    //    crc->bytes[1] &= 0xf0;
+    //    crc->bytes[0] ^= mask;
+    //}
+
+    uint32_t code;
+    while (len--) {
+        code = crc32_table[crc->crc & 0xff];
+        crc->crc >>= 8;
+        crc->crc |= ((*s++) << 24) & 0xff000000;
+        crc->crc ^= code;
+    }
+    //while (len--) {
+    //    code = crc32_table[(crc->crc & 0xff) ^ *s++];
+    //    crc->crc >>= 8;
+    //    crc->crc ^= code;
+    //}
+}
 
 uint32_t varcharSize(const SFSVarchar* varchar)
 {
@@ -50,7 +113,7 @@ SFSVarchar* sfsVarcharCreate(uint32_t varcharSize, const char* src)
 int sfsVarcharRelease(SFSVarchar* varchar)
 {
     free(varchar);
-    return 0;
+    return 1;
 }
 
 int sfsTableCons(SFSTable* table, uint32_t initStorSize, const SFSVarchar* recordMeta, SFSDatabase* db)
@@ -85,33 +148,36 @@ SFSTable* sfsTableCreate(uint32_t initStorSize, const SFSVarchar* recordMeta, SF
     table->lastVarchar = (SFSVarchar*)(&(table->buf[initStorSize]));
     table->database = db;
 
-    db->table[db->tableNum++] = table;
+    if(NULL != db)
+        db->table[(db->tableNum)++] = table;
     return table;
 }
 int sfsTableRelease(SFSTable* table)
 {
-    for (uint32_t i = 0; i < table->recordNum; i += __SIZEOF_POINTER__) {
-        free((void*)table->buf[i * __SIZEOF_POINTER__]);
+    for (uint32_t i = 0; i < table->varcharNum; i++) {
+        sfsVarcharRelease((SFSVarchar*)(table->lastVarchar+i));
     }
-    for (uint32_t i = 0; i < table->varcharNum; i += __SIZEOF_POINTER__) {
-        sfsVarcharRelease((SFSVarchar*)(table->lastVarchar - i * __SIZEOF_POINTER__));
-    }
-    return 0;
+    free(table);
+    return 1;
 }
 int sfsTableReserve(SFSTable** table, uint32_t storSize)
 {
     SFSTable* newtable = sfsTableCreate(storSize, (*table)->recordMeta, (*table)->database);
+    newtable->storSize = (*table)->storSize;
+    newtable->freeSpace -= newtable->storSize;
+
     memcpy(newtable->buf, (*table)->buf, (*table)->recordSize*(*table)->recordNum);
-    memcpy(newtable->lastVarchar - __SIZEOF_POINTER__ * (*table)->varcharNum, 
+    memcpy(newtable->lastVarchar - (*table)->varcharNum, 
         (*table)->lastVarchar, __SIZEOF_POINTER__ * (*table)->varcharNum);
+
     sfsTableRelease(*table);
-    table = &newtable;
+    *table = newtable;
     return 0;
 }
 
 void* sfsTableAddRecord(SFSTable** ptable)
 {
-    if ((*ptable)->freeSpace <= (*ptable)->recordSize)
+    if ((*ptable)->freeSpace < (*ptable)->recordSize)
         sfsTableReserve(ptable, (*ptable)->storSize * 2);
     (*ptable)->recordNum++;
     (*ptable)->freeSpace -= (*ptable)->recordSize;
@@ -127,13 +193,18 @@ SFSVarchar* sfsTableAddVarchar(SFSTable** ptable, uint32_t varcharLen, const cha
         sfsTableReserve(ptable, (*ptable)->storSize * 2);
 
     SFSVarchar* varchar = sfsVarcharCreate(varcharLen, src);
+
     (*ptable)->size += varcharSize(varchar);
     (*ptable)->freeSpace -= __SIZEOF_POINTER__;
     (*ptable)->storSize += __SIZEOF_POINTER__;
     (*ptable)->varcharNum++;
 
-    memcpy((*ptable)->lastVarchar - __SIZEOF_POINTER__, varchar, __SIZEOF_POINTER__);
-    (*ptable)->lastVarchar -= __SIZEOF_POINTER__;
+    (*ptable)->lastVarchar = (SFSVarchar*)&(*ptable)->buf[(*ptable)->freeSpace + (*ptable)->storSize - (*ptable)->varcharNum * __SIZEOF_POINTER__];
+
+    //memcpy(&(*ptable)->lastVarchar, &varchar, __SIZEOF_POINTER__);
+    memcpy((*ptable)->lastVarchar, &varchar, __SIZEOF_POINTER__);
+    //(void*)((*ptable)->lastVarchar - __SIZEOF_POINTER__) = varchar;
+
     return varchar;
 }
 
@@ -158,7 +229,7 @@ void sfsDatabaseRelease(SFSDatabase* db)
 }
 
 
-int sfsTableSave(FILE* fp, SFSTable* table,uint32_t offset)
+int sfsTableSave(FILE* fp, SFSTable* table,uint32_t offset, CRCNum* crc)
 {
     uint32_t tablesize = 0;
     char* s = (char*)malloc(10000);
@@ -173,16 +244,17 @@ int sfsTableSave(FILE* fp, SFSTable* table,uint32_t offset)
     memcpy(s + 36, table->buf, table->recordNum * table->recordSize);
 
     for (j = 0; j < table->varcharNum; j++) {
-        SFSVarchar* v = (SFSVarchar*)(table->lastVarchar + __SIZEOF_POINTER__ * j);
-        uint32_t varcharsize = varcharSize(v);
-        memcpy(s + 36 + table->recordNum * table->recordSize + tablesize, &((v)->len), varcharsize);
+        SFSVarchar** v = (SFSVarchar**)(table->lastVarchar + j);
+        uint32_t varcharsize = varcharSize(*v);
+        memcpy(s + 36 + table->recordNum * table->recordSize + tablesize, &((*v)->len), varcharsize);
         tablesize += varcharsize;
     }
 
     memcpy(s + 36 + table->recordNum * table->recordSize + tablesize, &(table->recordMeta)->len, varcharSize(table->recordMeta));
-    *(int*)s = 36 + table->recordNum * table->recordSize + tablesize;
+    *(uint32_t*)s = 36 + table->recordNum * table->recordSize + tablesize + varcharSize(table->recordMeta);
     fwrite(s, 36 + table->recordNum * table->recordSize + tablesize + varcharSize(table->recordMeta), 1, fp);
 
+    calcCRC(crc, s, *(uint32_t*)s);
     free(s);
 
     return table->size;
@@ -194,14 +266,19 @@ int sfsDatabaseSave(char* fileName, SFSDatabase* db)
     uint32_t tablesSize = 0;
     if (NULL == (fp = fopen(fileName, "wb")))
         sfsErrMsg();
+    CRCNum* crc = iniCRC();
+
     (void*)fwrite(&db->magic, sizeof(SFSDatabase), 1, fp);
 
     for (uint32_t i = 0; i < db->tableNum; i++) {
         fseek(fp, 0, SEEK_END);
-        tablesSize += sfsTableSave(fp, db->table[i], ftell(fp));
+        tablesSize += sfsTableSave(fp, db->table[i], ftell(fp), crc);
     }
     fseek(fp, 12, SEEK_SET);
     fwrite(&tablesSize, sizeof(uint32_t), 1, fp);
+    fseek(fp, 4, SEEK_SET);
+    fwrite(&(crc->crc), sizeof(uint32_t), 1, fp);
+    free(crc);
 
     fclose(fp);
     return 0;
@@ -214,13 +291,42 @@ SFSDatabase* sfsDatabaseCreateLoad(const char* fileName)
         sfsErrMsg();
 
     SFSDatabase* db = sfsDatabaseCreate();
+    CRCNum* crc = iniCRC();
+    int32_t checkSize;
+    char* s = (char*)malloc(1000);
+
     fread(&db->magic, sizeof(SFSDatabase), 1, fp);
     if (db->magic != 0x534653aa)
         sfsErrMsg();
 
-    for (uint32_t i = 0; i < db->tableNum; i++) {
+    fseek(fp, 0, SEEK_END);
+    checkSize = ftell(fp)-sizeof(SFSDatabase);
+    fseek(fp, sizeof(SFSDatabase), SEEK_SET);
+
+    while(checkSize > 0) {
+        if (checkSize > 900) {
+            fread(s, 900, 1, fp);
+            calcCRC(crc, s, 900);
+        }
+        else
+        {
+            fread(s, checkSize, 1, fp);
+            calcCRC(crc, s, checkSize);
+        }
+        checkSize -= 900;
+    }
+
+    if (crc->crc != db->crc)
+        sfsErrMsg();
+    else
+        printf("Load success\n");
+
+    fseek(fp, sizeof(SFSDatabase), SEEK_SET);
+
+    uint32_t tableNum = db->tableNum;
+    db->tableNum = 0;
+    for (uint32_t i = 0; i < tableNum; i++) {
         uint32_t varcharLen;
-        char* s = (char*)malloc(1000);
         uint32_t* tableHead = (uint32_t*)malloc(sizeof(uint32_t) * 9);
 
         fread(tableHead, sizeof(uint32_t), 9, fp);
@@ -229,7 +335,6 @@ SFSDatabase* sfsDatabaseCreateLoad(const char* fileName)
         fread(&varcharLen, sizeof(uint32_t), 1, fp);
         fread(s, 1, varcharLen, fp);
         SFSTable* table = sfsTableCreate(tableHead[1] + tableHead[2], sfsVarcharCreate(varcharLen, s), db);
-        db->tableNum--;
 
         fseek(fp, tableHead[8] + sizeof(uint32_t) * 9, SEEK_SET);
 
@@ -248,8 +353,10 @@ SFSDatabase* sfsDatabaseCreateLoad(const char* fileName)
         table->size = tableHead[0];
 
         free(tableHead);
-        free(s);
     }
+    free(s);
+    free(crc);
+
     fclose(fp);
     return db;
 }

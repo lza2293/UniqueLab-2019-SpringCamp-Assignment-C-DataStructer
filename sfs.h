@@ -1,8 +1,9 @@
 #ifndef SFS_H
 #define SFS_H
-
+//abcd
 // simple file storage
 #include <stdint.h>
+#include <stdio.h>
 
 typedef struct SFSVarchar{
     uint32_t len; /* length of the varchar string(buf[]) */
@@ -17,6 +18,7 @@ typedef struct SFSTable{
     uint32_t recordNum;          /* number of record in the table */
     uint32_t recordSize;         /* size of a record */
 
+    //24
     /* !!! when store in the file, the pointer should change to offset !!!*/
     struct SFSVarchar *recordMeta;   /* pointer of the recordMeta */
     struct SFSVarchar *lastVarchar;  /* pointer of the lastest inserted recordMeta */
@@ -35,6 +37,14 @@ typedef struct SFSDatabase{
     SFSTable *table[16]; /* pointer of the tables */
     char buf[];
 }SFSDatabase;
+
+typedef struct CRCNum{
+    uint32_t crc;
+}CRCNum;
+
+#define CRCTableSize (16)
+uint8_t CRCTables[16] = { 0,213,170,127,84,129,254,43,168,125,2,215,252,41,86,131 };
+uint32_t crc32_table[256];
 
 #define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
 inline void sfsCompileTest(){
@@ -59,14 +69,20 @@ SFSVarchar* sfsTableAddVarchar(SFSTable **ptable, uint32_t varcharLen, const cha
 SFSDatabase* sfsDatabaseCreate();
 void sfsDatabaseRelease(SFSDatabase* db);
 int sfsDatabaseSave(char *fileName, SFSDatabase* db);
-SFSDatabase* sfsDatabaseCreateLoad(char *fileName);
+int sfsTableSave(FILE* fp, SFSTable* table, uint32_t offset, CRCNum* crc);
+SFSDatabase* sfsDatabaseCreateLoad(const char *fileName);
 SFSTable* sfsDatabaseAddTable(SFSDatabase *db, uint32_t storSize, const SFSVarchar *recordMeta);
 
 
 // return the lastest err
 char *sfsErrMsg(); 
-void writeSize(char* target, char* size);
-uint32_t readSize(SFSVarchar* varchar);
+SFSVarchar* readVarchar(SFSTable** ptable, FILE* fp);
+uint32_t varcharSize(const SFSVarchar* varchar);
+uint32_t recordSize(const SFSVarchar* varchar);
+
+CRCNum* iniCRC();
+void makeCrcTable();
+void calcCRC(CRCNum* crc, char* s, uint32_t len);
 
 #endif
 
